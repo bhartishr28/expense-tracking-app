@@ -1,29 +1,50 @@
+
 import os
 import psycopg2
 import streamlit as st
 from dotenv import load_dotenv
+from streamlit.errors import StreamlitSecretNotFoundError
 
 load_dotenv()
 
-def get_connection():
 
-    if "DB_HOST" in st.secrets:
-        return psycopg2.connect(
-            host=st.secrets["DB_HOST"],
-            port=st.secrets["DB_PORT"],
-            database=st.secrets["DB_NAME"],
-            user=st.secrets["DB_USER"],
-            password=st.secrets["DB_PASSWORD"]
+def get_setting(name):
+    try:
+        value = st.secrets.get(name)
+        if value:
+            return value
+    except StreamlitSecretNotFoundError:
+        pass
+
+    return os.getenv(name)
+
+
+def get_connection():
+    config = {
+        "DB_HOST": get_setting("DB_HOST"),
+        "DB_PORT": get_setting("DB_PORT"),
+        "DB_NAME": get_setting("DB_NAME"),
+        "DB_USER": get_setting("DB_USER"),
+        "DB_PASSWORD": get_setting("DB_PASSWORD"),
+    }
+
+    missing = [
+        name for name, value in config.items()
+        if not value
+    ]
+
+    if missing:
+        raise ValueError(
+            "Missing database settings: " + ", ".join(missing)
         )
 
     return psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        database=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
+        host=config["DB_HOST"],
+        port=config["DB_PORT"],
+        database=config["DB_NAME"],
+        user=config["DB_USER"],
+        password=config["DB_PASSWORD"],
     )
-
 def get_categories():
     conn = get_connection()
     cursor = conn.cursor()

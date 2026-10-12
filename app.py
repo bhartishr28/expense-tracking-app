@@ -1,16 +1,112 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+
+import os
+from dotenv import load_dotenv
+from supabase import create_client
+
 from excel_report import create_excel_report
 
 from database import get_categories,get_payment_methods,add_expenses,get_expenses,update_expenses,delete_expenses
+from datetime import date
 
-st.set_page_config(page_title="Expense Tracker",
+load_dotenv()
+
+st.set_page_config(
+    page_title="Expense Tracker",
     page_icon="💰",
-    layout="wide")
-st.title("Expense Tracker")
+    layout="wide"
+)
 
+
+# Read configuration from .env locally or Streamlit Secrets online
+def get_setting(name):
+    value = os.getenv(name)
+
+    if value:
+        return value
+
+    try:
+        return st.secrets[name]
+    except Exception:
+        return None
+
+
+supabase_url = get_setting("SUPABASE_URL")
+supabase_key = get_setting("SUPABASE_KEY")
+
+#st.write("URL being used:", repr(supabase_url))
+
+app_username = get_setting("APP_USERNAME")
+auth_email = get_setting("SUPABASE_AUTH_EMAIL")
+
+
+
+# Require login before displaying the application
+if not st.session_state.get("authenticated", False):
+
+    st.title("💰 Expense Tracker Login")
+    st.write("Please log in to continue.")
+
+    if not all([supabase_url, supabase_key, app_username, auth_email]):
+        st.error(
+            "Login configuration is incomplete. "
+            "Check your .env file and Streamlit Cloud Secrets."
+        )
+        st.stop()
+
+    with st.form("login_form"):
+
+        username = st.text_input("Username")
+        password = st.text_input(
+            "Password",
+            type="password"
+        )
+
+        submitted = st.form_submit_button(
+            "Login",
+            use_container_width=True
+        )
+
+    if submitted:
+
+        if username.strip() != app_username:
+            st.error("Invalid username or password.")
+
+        else:
+            try:
+                supabase_client = create_client(
+                    supabase_url,
+                    supabase_key
+                )
+
+                supabase_client.auth.sign_in_with_password({
+                    "email": auth_email,
+                    "password": password
+                })
+
+                st.session_state.authenticated = True
+                st.session_state.page = "Dashboard"
+
+                st.rerun()
+
+            except Exception as e:
+                st.error(
+                    f"Login failed: {e}"
+                )
+
+    st.stop()
+
+
+# Main application — visible only after login
+st.title("Expense Tracker")
 st.sidebar.title("💰 Expense Tracker")
+
+if st.sidebar.button("🚪 Log out", use_container_width=True):
+    st.session_state.authenticated = False
+    st.session_state.page = "Dashboard"
+    st.rerun()
 
 if "page" not in st.session_state:
     st.session_state.page = "Dashboard"
@@ -51,7 +147,8 @@ if option == "Dashboard":
 
     with col1:
         start_date = st.date_input(
-            "From Date"
+            "From Date",
+            value=date(2026, 10, 1)
         )
 
     with col2:
@@ -160,40 +257,96 @@ if option == "Dashboard":
         use_container_width=True
     )
     # Monthly spending trend
-    st.subheader("Monthly Spending Trend")
 
-    monthly_totals = {}
+    # Prepare date-based data for charts
+    trend_data = []
 
     for expense in filtered_expenses:
+        expense_date = pd.to_datetime(expense[1]).date()
 
-        expense_date = expense[1]
-        amount = float(expense[4])
+        trend_data.append({
+            "Date": expense_date,
+            "Amount": float(expense[4])
+        })
 
-        month = expense_date.strftime("%Y-%m")
+    trend_df = pd.DataFrame(trend_data)
 
-        if month in monthly_totals:
-            monthly_totals[month] = (
-                monthly_totals[month] + amount
-            )
-        else:
-            monthly_totals[month] = amount
+    # Daily Spending Trend
+    st.subheader("Daily Spending Trend")
 
-    monthly_df = pd.DataFrame(
-        monthly_totals.items(),
-        columns=["Month", "Total Expense"]
-    )
+    if not trend_df.empty:
+        daily_df = (
+            trend_df.groupby("Date", as_index=False)["Amount"]
+            .sum()
+            .sort_values("Date")
+        )
 
-    fig = px.bar(
-        monthly_df,
-        x="Month",
-        y="Total Expense",
-        title="Monthly Spending Trend"
-    )
+        fig = px.line(
+            daily_df,
+            x="Date",
+            y="Amount",
+            title="Daily Spending Trend",
+            markers=True,
+            labels={
+                "Date": "Date",
+                "Amount": "Total Spending (₹)"
+            }
+        )
 
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
+        fig.update_xaxes(
+            tickformat="%d %b",
+            title="Date",
+            tickangle=-45
+        )
+
+        fig.update_layout(
+            hovermode="x unified"
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+    else:
+        st.info("No expenses found for the selected date range.")
+
+    # Monthly Spending Trend
+    st.subheader("Monthly Spending Trend")
+
+    if not trend_df.empty:
+        trend_df["Month"] = pd.to_datetime(
+            trend_df["Date"]
+        ).dt.to_period("M").astype(str)
+
+        monthly_df = (
+            trend_df.groupby("Month", as_index=False)["Amount"]
+            .sum()
+            .sort_values("Month")
+        )
+
+        fig = px.bar(
+            monthly_df,
+            x="Month",
+            y="Amount",
+            title="Monthly Spending Trend",
+            labels={
+                "Month": "Month",
+                "Amount": "Total Spending (₹)"
+            }
+        )
+
+        fig.update_xaxes(
+            tickformat="%b %Y",
+            title="Month",
+            type="category"
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+    else:
+        st.info("No expenses found for the selected date range.")
 
 
 # Add Expenses
